@@ -35,10 +35,10 @@
 #include "mcp2515_defs.h"
 #include <can_common.h>
 
-//#define DEBUG_SETUP
+#define DEBUG_SETUP
 
-#define MCP_RX_BUFFER_SIZE	32
-#define MCP_TX_BUFFER_SIZE  16
+#define MCP_RX_BUFFER_SIZE	64
+#define MCP_TX_BUFFER_SIZE  32
 
 class MCP2515 : public CAN_COMMON
 {

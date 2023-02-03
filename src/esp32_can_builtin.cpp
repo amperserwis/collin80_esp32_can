@@ -9,6 +9,8 @@
 #include "Arduino.h"
 #include "esp32_can_builtin.h"
 
+
+
 CAN_device_t CAN_cfg = {
     CAN_SPEED_500KBPS,
     GPIO_NUM_17,
@@ -18,8 +20,9 @@ CAN_device_t CAN_cfg = {
 };
 
 QueueHandle_t callbackQueue;
-extern QueueHandle_t lowLevelRXQueue;
 
+extern QueueHandle_t lowLevelRXQueue;
+static const char* TAG = "CAN";
 extern volatile uint32_t needReset;
 
 ESP32CAN::ESP32CAN(gpio_num_t rxPin, gpio_num_t txPin) : CAN_COMMON(32)
@@ -70,6 +73,7 @@ void task_LowLevelRX(void *pvParameters)
         //receive next CAN frame from queue and fire off the callback
         if(xQueueReceive(lowLevelRXQueue, &rxFrame, portMAX_DELAY)==pdTRUE)
         {
+            ESP_LOGD(TAG, "recieved");
             espCan->processFrame(rxFrame);
         }
     }
@@ -372,6 +376,7 @@ uint32_t ESP32CAN::get_rx_buff(CAN_FRAME &msg)
 {
     CAN_frame_t __RX_frame;
     //receive next CAN frame from queue
+    ESP_LOGD(TAG, "read");
     if(xQueueReceive(CAN_cfg.rx_queue,&__RX_frame, 0)==pdTRUE)
     {
         msg.id = __RX_frame.MsgID;
