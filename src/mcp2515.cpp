@@ -28,6 +28,11 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
+#define MCP2515_SCK  18  // SCK input of MCP2517 
+#define MCP2515_MOSI 23 // SDI input of MCP2517  
+#define MCP2515_MISO 19 // SDO output of MCP2517 
+
+
 #include "Arduino.h"
 #include "SPI.h"
 #include "mcp2515.h"
@@ -37,14 +42,9 @@
 SPISettings mcpSPISettings(8000000, MSBFIRST, SPI_MODE0);
 
 static TaskHandle_t intDelegateTask = NULL;
-
+static const char* TAG = "CAN";
 QueueHandle_t	callbackQueueM15;
 
-void MCP_INTHandler() {
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-  vTaskNotifyGiveFromISR(intDelegateTask, &xHigherPriorityTaskWoken); //send notice to the handler task that it can do the SPI transaction now
-  if (xHigherPriorityTaskWoken == pdTRUE) portYIELD_FROM_ISR(); //if vTaskNotify will wake the task (and it should) then yield directly to that task now
-}
 
 /*
 Issue callbacks to registered functions and objects
@@ -72,13 +72,22 @@ void task_MCP15( void *pvParameters )
 }
 
 void task_MCPInt15( void *pvParameters )
+// {
+//   MCP2515* mcpCan = (MCP2515*)pvParameters;
+//   while (1)
+//   {
+//     ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait infinitely for this task to be notified
+//     mcpCan->intHandler(); //not truly an interrupt handler anymore but still kind of
+//   }
+// }
 {
-  MCP2515* mcpCan = (MCP2515*)pvParameters;
-  while (1)
-  {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //wait infinitely for this task to be notified
-    mcpCan->intHandler(); //not truly an interrupt handler anymore but still kind of
-  }
+    const TickType_t iDelay = portTICK_PERIOD_MS;
+    MCP2515* mcpCan = (MCP2515*)pvParameters;
+    while (1)
+    {
+        vTaskDelay(iDelay);
+        mcpCan->intHandler(); //not truly an interrupt handler anymore
+    }
 }
 
 void MCP2515::sendCallback(CAN_FRAME *frame)
@@ -108,15 +117,22 @@ MCP2515::MCP2515(uint8_t CS_Pin, uint8_t INT_Pin) : CAN_COMMON(6) {
   pinMode(CS_Pin, OUTPUT);
   digitalWrite(CS_Pin,HIGH);
   pinMode(INT_Pin,INPUT);
-  digitalWrite(INT_Pin,HIGH);
+  // digitalWrite(INT_Pin,HIGH);
 
-  attachInterrupt(INT_Pin, MCP_INTHandler, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(INT_Pin), MCP_INTHandler, FALLING);
   
   _CS = CS_Pin;
   _INT = INT_Pin;
+
+  #ifdef DEBUG_SETUP  
+    Serial.print("CS_Pin: ");
+    Serial.print(CS_Pin);
+    Serial.print("  INT_Pin: ");
+    Serial.println(INT_Pin);
+  #endif
   
   savedBaud = 0;
-  savedFreq = 16;
+  savedFreq = 0; //Important 
   running = 0; 
   inhibitTransactions = false;
   initializedResources = false;
@@ -130,20 +146,32 @@ void MCP2515::initializeResources()
   txQueue = xQueueCreate(MCP_TX_BUFFER_SIZE, sizeof(CAN_FRAME));
   callbackQueueM15 = xQueueCreate(16, sizeof(CAN_FRAME));
 
+
+
                             //func        desc    stack, params, priority, handle to task, core to pin to
-  xTaskCreatePinnedToCore(&task_MCP15, "CAN_RX_M15", 4096, this, 3, NULL, 0);
-  xTaskCreatePinnedToCore(&task_MCPInt15, "CAN_INT_M15", 4096, this, 10, &intDelegateTask, 0);
+  BaseType_t res = xTaskCreatePinnedToCore(&task_MCP15, "CAN_RX_M15", 4096, this, 8, NULL, 0);
+  if (res = pdTRUE) {
+        Serial.println("task_MCP15 attached");
+  }
+  res = xTaskCreatePinnedToCore(&task_MCPInt15, "CAN_INT_M15", 4096, this, 100, &intDelegateTask, 0);
+  if (res = pdTRUE) {
+        Serial.println("task_MCPInt15 attached");
+  }
+
+  #ifdef DEBUG_SETUP  
+    Serial.println("initializedResources");
+  #endif
 
   initializedResources = true;
 }
 
 void MCP2515::setINTPin(uint8_t pin)
 {
-  detachInterrupt(_INT);
+  // detachInterrupt(_INT);
   _INT = pin;
-  pinMode(_INT,INPUT);
-  digitalWrite(_INT,HIGH);
-  attachInterrupt(_INT, MCP_INTHandler, FALLING);
+  // pinMode(_INT,INPUT);
+  // digitalWrite(_INT,HIGH);
+  // attachInterrupt(_INT, MCP_INTHandler, FALLING);
 }
 
 void MCP2515::setCSPin(uint8_t pin)
@@ -237,10 +265,22 @@ int MCP2515::Init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW) {
 
 bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool autoBaud) {
 
-  SPI.begin(SCK, MISO, MOSI, SS);       //Set up Serial Peripheral Interface Port for CAN2
+  SPI.begin(MCP2515_SCK, MCP2515_MISO, MCP2515_MOSI);       //Set up Serial Peripheral Interface Port for CAN2
   SPI.setClockDivider(SPI_CLOCK_DIV32);
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
+  SPI.setHwCs(false); //allow manual control of CS line
+
+  #ifdef DEBUG_SETUP  
+    Serial.print("MCP2515_SCK: ");
+    Serial.print(MCP2515_SCK);
+    Serial.print("  MCP2515_MISO: ");
+    Serial.println(MCP2515_MISO);
+    Serial.print("  MCP2515_MOSI: ");
+    Serial.println(MCP2515_MOSI);
+  #endif
+
+  Write(CANINTE,0); //disable all interrupts during init
 
   if (!initializedResources) initializeResources();
   
@@ -263,6 +303,13 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
   int bestMatchIdx = 10;
   float savedBT;
 
+  #ifdef DEBUG_SETUP  
+    Serial.print("CAN_Bus_Speed: ");
+    Serial.print(CAN_Bus_Speed);
+    Serial.print("  freqMhz: ");
+    Serial.println(freqMhz);
+  #endif
+
   float speed = CAN_Bus_Speed;
   if (speed > 5000.0) speed *= 0.001;
 
@@ -272,12 +319,7 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
   for(BRP=0; BRP < 63; BRP++) {
     TQ = 2.0 * (float)(BRP + 1) / (float)freqMhz;
     tempBT = NBT / TQ;
-#ifdef DEBUG_SETUP
-    SerialUSB.print("BRP: ");
-    SerialUSB.print(BRP);
-    SerialUSB.print("  tempBT: ");
-    SerialUSB.println(tempBT);
-#endif
+
     BT = (int)tempBT;
     if ( (tempBT - BT) < bestMatchf)
     {
@@ -292,34 +334,21 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
 
   BT = savedBT;
   BRP = bestMatchIdx;
-#ifdef DEBUG_SETUP  
-  SerialUSB.print("BRP: ");
-  SerialUSB.print(BRP);
-  SerialUSB.print("  BT: ");
-  SerialUSB.println(BT);
-#endif
-  
+ 
   byte SPT = (0.7 * BT); // Sample point
   byte PRSEG = (SPT - 1) / 2;
   byte PHSEG1 = SPT - PRSEG - 1;
   byte PHSEG2 = BT - PHSEG1 - PRSEG - 1;
-#ifdef DEBUG_SETUP
-  SerialUSB.print("PROP: ");
-  SerialUSB.print(PRSEG);
-  SerialUSB.print("  SEG1: ");
-  SerialUSB.print(PHSEG1);
-  SerialUSB.print("  SEG2: ");
-  SerialUSB.println(PHSEG2);
-#endif
+
   // Programming requirements
   if(PRSEG + PHSEG1 < PHSEG2) 
   {
-      //SerialUSB.println("PRSEG + PHSEG1 less than PHSEG2!");
+      //Serial.println("PRSEG + PHSEG1 less than PHSEG2!");
       return false;
   }
   if(PHSEG2 <= SJW) 
   {
-      //SerialUSB.println("PHSEG2 less than SJW");
+      //Serial.println("PHSEG2 less than SJW");
       return false;
   }
   
@@ -342,14 +371,14 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
     // Return to Normal mode
     if(!Mode(MODE_NORMAL)) 
     {
-        //SerialUSB.println("Could not enter normal mode");
+        //Serial.println("Could not enter normal mode");
         return false;
     }
   } else {
     // Set to Listen Only mode
     if(!Mode(MODE_LISTEN)) 
     {
-        //SerialUSB.println("Could not enter listen only mode");
+        //Serial.println("Could not enter listen only mode");
         return false;
     }
   }
@@ -361,8 +390,8 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
   if (rtn == data) return true;
   else 
   {
-    //SerialUSB.println(data, HEX);
-    //SerialUSB.println(rtn, HEX);
+    Serial.println(data, HEX);
+    Serial.println(rtn, HEX);
     return false;
   }
 
@@ -371,6 +400,7 @@ bool MCP2515::_init(uint32_t CAN_Bus_Speed, uint8_t Freq, uint8_t SJW, bool auto
 
 uint16_t MCP2515::available()
 {
+  if (!rxQueue) return 0; //why would this happen though?!
   return uxQueueMessagesWaiting(rxQueue);
 }
 
@@ -442,17 +472,17 @@ int MCP2515::_setFilterSpecific(uint8_t mailbox, uint32_t id, uint32_t mask, boo
 
 uint32_t MCP2515::init(uint32_t ul_baudrate)
 {
-    return Init(ul_baudrate, savedFreq);
+    return Init(ul_baudrate, 8);
 }
 
 uint32_t MCP2515::beginAutoSpeed()
 {
-    return Init(0, savedFreq);
+    return Init(0, 8);
 }
 
 uint32_t MCP2515::set_baudrate(uint32_t ul_baudrate)
 {
-    return Init(ul_baudrate, savedFreq);
+    return Init(ul_baudrate, 8);
 }
 
 void MCP2515::setListenOnlyMode(bool state)
@@ -878,18 +908,20 @@ void MCP2515::EnqueueRX(CAN_FRAME& newFrame) {
 //it will place it into hardware immediately instead of using
 //the software queue
 void MCP2515::EnqueueTX(CAN_FRAME& newFrame) {
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  //BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xQueueSend(txQueue, &newFrame, 0);
-  xHigherPriorityTaskWoken = xTaskNotifyGive(intDelegateTask); //send notice to the handler task that it can do the SPI transaction now
+  //xHigherPriorityTaskWoken = xTaskNotifyGive(intDelegateTask); //send notice to the handler task that it can do the SPI transaction now
   //if (xHigherPriorityTaskWoken == pdTRUE) 
 }
 
 bool MCP2515::GetRXFrame(CAN_FRAME &frame) {
+  ESP_LOGD(TAG, "read");
   if (xQueueReceive(rxQueue, &frame, 0) == pdTRUE) return true;
 	return false;
 }
 
 void MCP2515::intHandler(void) {
+    //Serial.print("i");
     CAN_FRAME message;
     uint32_t ctrlVal;
     inhibitTransactions = true;
@@ -964,7 +996,7 @@ void MCP2515::intHandler(void) {
 void MCP2515::handleFrameDispatch(CAN_FRAME *frame, int filterHit)
 {
   CANListener *thisListener;
-
+  ESP_LOGD(TAG, "recieved");
   //First, try to send a callback. If no callback registered then buffer the frame.
   if (cbCANFrame[filterHit]) 
 	{
