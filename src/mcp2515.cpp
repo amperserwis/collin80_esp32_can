@@ -153,7 +153,7 @@ void MCP2515::initializeResources()
   if (res = pdTRUE) {
         Serial.println("task_MCP15 attached");
   }
-  res = xTaskCreatePinnedToCore(&task_MCPInt15, "CAN_INT_M15", 4096, this, 100, &intDelegateTask, 0);
+  res = xTaskCreatePinnedToCore(&task_MCPInt15, "CAN_INT_M15", 4096, this, 19, &intDelegateTask, 0);
   if (res = pdTRUE) {
         Serial.println("task_MCPInt15 attached");
   }
@@ -900,7 +900,7 @@ void MCP2515::GetRXMask(uint8_t mask, uint32_t &filterVal)
 
 //Places the given frame into the receive queue
 void MCP2515::EnqueueRX(CAN_FRAME& newFrame) {
-  xQueueSendFromISR(rxQueue, &newFrame, NULL);
+  xQueueSend(rxQueue, &newFrame, NULL);
 }
 
 //Places the given frame into the transmit queue
@@ -957,24 +957,24 @@ void MCP2515::intHandler(void) {
     }
     if((status & 4) == 0) //TX buffer 0 is not pending a transaction
     {
-      if (uxQueueMessagesWaitingFromISR(txQueue)) {
-        xQueueReceiveFromISR(txQueue, &message, 0);
+      if (uxQueueMessagesWaiting(txQueue)) {
+        xQueueReceive(txQueue, &message, 0);
 			  LoadBuffer(TXB0, &message);
 		   	SendBuffer(TXB0);
 	    }
     }
     if((status & 16) == 0) //TX buffer 1 not pending any message to send 
     {
-      if (uxQueueMessagesWaitingFromISR(txQueue)) {
-        xQueueReceiveFromISR(txQueue, &message, 0);
+      if (uxQueueMessagesWaiting(txQueue)) {
+        xQueueReceive(txQueue, &message, 0);
 			  LoadBuffer(TXB1, &message);
 		   	SendBuffer(TXB1);
 	    }
     }
     if((status & 64) == 0) //TX buffer 2 not pending any message to send 
     {
-      if (uxQueueMessagesWaitingFromISR(txQueue)) {
-        xQueueReceiveFromISR(txQueue, &message, 0);
+      if (uxQueueMessagesWaiting(txQueue)) {
+        xQueueReceive(txQueue, &message, 0);
 			  LoadBuffer(TXB2, &message);
 		   	SendBuffer(TXB2);
 	    }
@@ -1001,13 +1001,13 @@ void MCP2515::handleFrameDispatch(CAN_FRAME *frame, int filterHit)
   if (cbCANFrame[filterHit]) 
 	{
     frame->fid = filterHit;
-    xQueueSendFromISR(callbackQueueM15, frame, 0);
+    xQueueSend(callbackQueueM15, frame, 0);
     return;
 	}
 	else if (cbGeneral) 
 	{
     frame->fid = 0xFF;
-    xQueueSendFromISR(callbackQueueM15, frame, 0);
+    xQueueSend(callbackQueueM15, frame, 0);
     return;
 	}
 	else
@@ -1020,18 +1020,18 @@ void MCP2515::handleFrameDispatch(CAN_FRAME *frame, int filterHit)
 				if (thisListener->isCallbackActive(filterHit)) 
 				{
 					frame->fid = 0x80000000ul + (listenerPos << 24ul) + filterHit;
-          xQueueSendFromISR(callbackQueueM15, frame, 0);
+          xQueueSend(callbackQueueM15, frame, 0);
           return;
 				}
 				else if (thisListener->isCallbackActive(numFilters)) //global catch-all 
 				{
 					frame->fid = 0x80000000ul + (listenerPos << 24ul) + 0xFF;
-          xQueueSendFromISR(callbackQueueM15, frame, 0);
+          xQueueSend(callbackQueueM15, frame, 0);
           return;
 				}
 			}
 		}
 	} 
 	//if none of the callback types caught this frame then queue it in the buffer
-  xQueueSendFromISR(rxQueue, frame, NULL);
+  xQueueSend(rxQueue, frame, NULL);
 }
